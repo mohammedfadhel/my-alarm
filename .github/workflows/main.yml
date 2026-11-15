@@ -24,6 +24,21 @@ jobs:
           ls proj
           touch proj/app/proguard-rules.pro
 
+      - name: Fix silent tones
+        run: |
+          cat > "$RUNNER_TEMP/fix_audio.py" <<'PY_EOF'
+          p = "proj/app/src/main/java/com/wakeup/app/audio/ToneGeneratorEngine.kt"
+          s = open(p, encoding="utf-8").read()
+          I = " " * 12
+          old = I + "if (track.state != AudioTrack.STATE_INITIALIZED) {\n" + I + "    track.release()\n" + I + "    return\n" + I + "}\n" + I + "track.write(samples, 0, samples.size)\n"
+          new = I + "if (track.state == AudioTrack.STATE_UNINITIALIZED) {\n" + I + "    track.release()\n" + I + "    return\n" + I + "}\n" + I + "track.write(samples, 0, samples.size)\n" + I + "if (track.state != AudioTrack.STATE_INITIALIZED) {\n" + I + "    track.release()\n" + I + "    return\n" + I + "}\n"
+          assert old in s, "pattern not found"
+          s = s.replace(old, new, 1)
+          open(p, "w", encoding="utf-8").write(s)
+          print("audio fix applied")
+          PY_EOF
+          python3 "$RUNNER_TEMP/fix_audio.py"
+
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
