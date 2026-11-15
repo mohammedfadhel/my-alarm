@@ -1,0 +1,65 @@
+name: Build Signed APK
+
+on:
+  workflow_dispatch:
+  push:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Unzip the project
+        run: |
+          ZIP="$(ls *.zip | head -1)"
+          echo "Using $ZIP"
+          mkdir work
+          unzip -q "$ZIP" -d work
+          SETTINGS="$(find work -name settings.gradle.kts -not -path '*/node_modules/*' | head -1)"
+          if [ -z "$SETTINGS" ]; then echo "settings.gradle.kts not found in the zip"; exit 1; fi
+          ROOT="$(dirname "$SETTINGS")"
+          echo "Project root: $ROOT"
+          mv "$ROOT" proj
+          ls proj
+          touch proj/app/proguard-rules.pro
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - name: Accept Android SDK licenses
+        run: yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses > /dev/null || true
+
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: 8.10.2
+
+      - name: Build debug APK
+        working-directory: proj
+        run: gradle assembleDebug --no-daemon --stacktrace
+
+      - name: Sign the APK with the fixed key
+        env:
+          KS_B64: ${{ secrets.KEYSTORE_B64 }}
+          KS_PASS: ${{ secrets.KEYSTORE_PASSWORD }}
+        run: |
+          if [ -z "$KS_B64" ] || [ -z "$KS_PASS" ]; then
+            echo "ERROR: add the two secrets KEYSTORE_B64 and KEYSTORE_PASSWORD in Settings > Secrets and variables > Actions"
+            exit 1
+          fi
+          echo "$KS_B64" | base64 -d > "$RUNNER_TEMP/release.keystore"
+          APK="$(ls proj/app/build/outputs/apk/debug/*.apk | head -1)"
+          SDK="${ANDROID_HOME:-$ANDROID_SDK_ROOT}"
+          APKSIGNER="$(ls -d "$SDK"/build-tools/*/apksigner | sort -V | tail -1)"
+          mkdir -p out
+          "$APKSIGNER" sign --ks "$RUNNER_TEMP/release.keystore" --ks-key-alias mykey --ks-pass env:KS_PASS --key-pass env:KS_PASS --out out/MyAlarm.apk "$APK"
+          "$APKSIGNER" verify --print-certs out/MyAlarm.apk
+          rm -f "$RUNNER_TEMP/release.keystore"
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: MyAlarm-APK
+          path: out/MyAlarm.apk
